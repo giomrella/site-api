@@ -1,7 +1,7 @@
 {
 	"version": "2.0",
 	"routeKey": "$default",
-	"rawPath": "/echo/Hi Gio",
+	"rawPath": "/increment",
 	"rawQueryString": "first=key1&second=key2",
 	"cookies": [
 		"cookie1",

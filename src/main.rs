@@ -1,44 +1,6 @@
-// use lambda_http::{run, service_fn, tracing, Body, Error, Request, RequestExt, Response};
-//
-// /// This is the main body for the function.
-// /// Write your code inside it.
-// /// There are some code example in the following URLs:
-// /// - https://github.com/awslabs/aws-lambda-rust-runtime/tree/main/examples
-// async fn function_handler(event: Request) -> Result<Response<Body>, Error> {
-//     // Extract some useful information from the request
-//     let who = event
-//         .query_string_parameters_ref()
-//         .and_then(|params| params.first("name"))
-//         .unwrap_or("world");
-//     let message = format!("Hello {who}, this is an AWS Lambda HTTP request");
-//
-//     // Return something that implements IntoResponse.
-//     // It will be serialized to the right response event automatically by the runtime
-//     let resp = Response::builder()
-//         .status(200)
-//         .header("content-type", "text/html")
-//         .body(message.into())
-//         .map_err(Box::new)?;
-//     Ok(resp)
-// }
-//
-// #[tokio::main]
-// async fn main() -> Result<(), Error> {
-//     tracing::init_default_subscriber();
-//
-//     run(service_fn(function_handler)).await
-// }
-
-//! This is an example function that leverages the Lambda Rust runtime HTTP support
-//! and the [axum](https://docs.rs/axum/latest/axum/index.html) web framework.  The
-//! runtime HTTP support is backed by the [tower::Service](https://docs.rs/tower-service/0.3.2/tower_service/trait.Service.html)
-//! trait.  Axum's applications are also backed by the `tower::Service` trait.  That means
-//! that it is fairly easy to build an Axum application and pass the resulting `Service`
-//! implementation to the Lambda runtime to run as a Lambda function.  By using Axum instead
-//! of a basic `tower::Service` you get web framework niceties like routing, request component
-//! extraction, validation, etc.
-use axum::extract::Query;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
+use axum::Extension;
 use axum::{
     extract::Path,
     response::Json,
@@ -48,16 +10,29 @@ use axum::{
 use lambda_http::{run, tracing, Error};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tower::Layer;
+use tower_http::{add_extension::AddExtensionLayer, normalize_path::NormalizePathLayer};
 use std::env::set_var;
+use std::sync::{Arc, RwLock};
 
 #[derive(Deserialize, Serialize)]
 struct Params {
     first: Option<String>,
     second: Option<String>,
 }
+#[derive(Default)]
+struct ApiState {
+    counter: i32,
+}
+type SharedState = Arc<RwLock<ApiState>>;
 
 async fn root() -> Json<Value> {
     Json(json!({ "msg": "I am GET /" }))
+}
+async fn increment(Extension(state): Extension<SharedState>) -> String {
+    let counter = state.read().unwrap().counter + 1;
+    state.write().unwrap().counter = counter;
+    format!("{counter}")
 }
 
 async fn echo(Path(echo): Path<String>) -> String {
@@ -102,14 +77,17 @@ async fn main() -> Result<(), Error> {
 
     // required to enable CloudWatch error logging by the runtime
     tracing::init_default_subscriber();
-
-    let app = Router::new()
+    let router = Router::new()
         .route("/", get(root))
         .route("/echo/:echo", get(echo))
         .route("/foo", get(get_foo).post(post_foo))
         .route("/foo/:name", post(post_foo_name))
         .route("/parameters", get(get_parameters))
-        .route("/health/", get(health_check));
+        .route("/health", get(health_check))
+        .route("/increment", get(increment))
+        .layer(AddExtensionLayer::new(SharedState::default()))
+        ;
+    let app = NormalizePathLayer::trim_trailing_slash().layer(router);
 
     run(app).await
 }
